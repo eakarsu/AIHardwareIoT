@@ -4,7 +4,7 @@ import useWebSocket from '../hooks/useWebSocket';
 import LoadingSpinner from '../components/LoadingSpinner';
 import TelemetryChart from '../components/TelemetryChart';
 import Modal from '../components/Modal';
-import { Download, Activity, Clock, Cpu, BarChart3, Layers, Radio } from 'lucide-react';
+import { Download, Activity, Clock, Cpu, BarChart3, Layers, Radio, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
 const METRICS = ['temperature', 'humidity', 'pressure', 'motion', 'power', 'cpu_usage', 'memory_usage',
@@ -20,6 +20,8 @@ export default function Telemetry() {
   const [metricFilter, setMetricFilter] = useState('');
   const [timeRange, setTimeRange] = useState('24h');
   const [detailRecord, setDetailRecord] = useState(null);
+  const [tablePage, setTablePage] = useState(1);
+  const TABLE_PAGE_SIZE = 50;
   // Multi-device comparison
   const [compareMode, setCompareMode] = useState(false);
   const [compareDevices, setCompareDevices] = useState([]);
@@ -226,8 +228,24 @@ export default function Telemetry() {
       ))}
 
       <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-        <div className="p-4 border-b border-gray-700">
+        <div className="p-4 border-b border-gray-700 flex items-center justify-between">
           <h3 className="text-white font-semibold">Raw Data ({telemetry.length} records)</h3>
+          {telemetry.length > TABLE_PAGE_SIZE && (
+            <div className="flex items-center gap-2">
+              <button onClick={() => setTablePage(p => Math.max(1, p - 1))} disabled={tablePage === 1}
+                className="p-1 text-gray-400 hover:text-white disabled:opacity-40 transition-colors">
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-sm text-gray-400">
+                Page {tablePage} of {Math.ceil(telemetry.length / TABLE_PAGE_SIZE)}
+              </span>
+              <button onClick={() => setTablePage(p => Math.min(Math.ceil(telemetry.length / TABLE_PAGE_SIZE), p + 1))}
+                disabled={tablePage >= Math.ceil(telemetry.length / TABLE_PAGE_SIZE)}
+                className="p-1 text-gray-400 hover:text-white disabled:opacity-40 transition-colors">
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -241,7 +259,7 @@ export default function Telemetry() {
               </tr>
             </thead>
             <tbody>
-              {telemetry.slice(0, 50).map(t => (
+              {telemetry.slice((tablePage - 1) * TABLE_PAGE_SIZE, tablePage * TABLE_PAGE_SIZE).map(t => (
                 <tr key={t.id} onClick={() => setDetailRecord(t)} className="border-t border-gray-700/50 hover:bg-gray-700/30 cursor-pointer">
                   <td className="px-4 py-3 text-white">{t.device_name}</td>
                   <td className="px-4 py-3 text-gray-300">{t.metric_type}</td>

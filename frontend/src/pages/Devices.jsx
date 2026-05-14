@@ -5,7 +5,7 @@ import DeviceCard from '../components/DeviceCard';
 import Modal from '../components/Modal';
 import StatusIndicator from '../components/StatusIndicator';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { Plus, Search, Cpu, MapPin, Wifi, Clock, Server, Tag, Edit3 } from 'lucide-react';
+import { Plus, Search, Cpu, MapPin, Wifi, Clock, Server, Tag, Edit3, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const DEVICE_TYPES = ['temperature_sensor', 'humidity_sensor', 'pressure_sensor', 'motion_detector', 'camera',
   'edge_compute_node', 'gateway', 'smart_meter', 'air_quality_sensor', 'vibration_sensor',
@@ -27,17 +27,32 @@ export default function Devices() {
   const [editDevice, setEditDevice] = useState(null);
   const [detailDevice, setDetailDevice] = useState(null);
   const [form, setForm] = useState({ name: '', type: 'temperature_sensor', status: 'offline', location: '', group_name: 'warehouse-a', firmware_version: '1.0.0', ip_address: '', mac_address: '' });
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const PAGE_SIZE = 20;
 
-  const fetchDevices = () => {
+  const fetchDevices = (currentPage = page) => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (typeFilter) params.set('type', typeFilter);
     if (statusFilter) params.set('status', statusFilter);
     if (groupFilter) params.set('group_name', groupFilter);
-    api.get(`/devices?${params}`).then(res => setDevices(res.data)).catch(console.error).finally(() => setLoading(false));
+    params.set('page', currentPage);
+    params.set('limit', PAGE_SIZE);
+    api.get(`/devices?${params}`).then(res => {
+      if (res.data && res.data.data) {
+        setDevices(res.data.data);
+        setTotal(res.data.total);
+        setTotalPages(res.data.totalPages);
+      } else {
+        setDevices(Array.isArray(res.data) ? res.data : []);
+      }
+    }).catch(console.error).finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchDevices(); }, [search, typeFilter, statusFilter, groupFilter]);
+  useEffect(() => { setPage(1); fetchDevices(1); }, [search, typeFilter, statusFilter, groupFilter]);
+  useEffect(() => { fetchDevices(page); }, [page]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -68,7 +83,7 @@ export default function Devices() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Devices ({devices.length})</h1>
+        <h1 className="text-2xl font-bold text-white">Devices ({total || devices.length})</h1>
         <button onClick={() => { setEditDevice(null); setForm({ name: '', type: 'temperature_sensor', status: 'offline', location: '', group_name: 'warehouse-a', firmware_version: '1.0.0', ip_address: '', mac_address: '' }); setShowModal(true); }}
           className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg transition-colors">
           <Plus className="w-4 h-4" /> Add Device
@@ -101,9 +116,26 @@ export default function Devices() {
         ))}
       </div>
 
-      {devices.length === 0 && (
+      {devices.length === 0 && !loading && (
         <div className="text-center py-12 text-gray-400">
           <p>No devices found. Try adjusting your filters.</p>
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-4">
+          <p className="text-sm text-gray-400">{total} devices total</p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+              className="p-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-400 hover:text-white disabled:opacity-40 transition-colors">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-sm text-gray-400 px-2">Page {page} of {totalPages}</span>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+              className="p-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-400 hover:text-white disabled:opacity-40 transition-colors">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 

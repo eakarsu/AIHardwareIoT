@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer } = require('ws');
@@ -12,10 +14,22 @@ const pool = require('./db');
 const initDb = require('./initDb');
 const aiService = require('./services/openRouterService');
 
+// === Batch 04 Gaps & Frontend Mounts ===
+const route_gap_no_automated_rule_tuning_from_historical = require('../routes/gap-no-automated-rule-tuning-from-historical');
+const route_gap_no_predictive_bandwidthcost_optimizer_fo = require('../routes/gap-no-predictive-bandwidthcost-optimizer-fo');
+const route_gap_no_videoaudio_anomaly_detection_for_av = require('../routes/gap-no-videoaudio-anomaly-detection-for-av');
+const route_gap_no_mqtt_broker_integration_only_http = require('../routes/gap-no-mqtt-broker-integration-only-http');
+const route_gap_no_ota_firmware_delivery_pipeline_only = require('../routes/gap-no-ota-firmware-delivery-pipeline-only');
+const route_gap_no_multi_tenant_fleet_partitioning = require('../routes/gap-no-multi-tenant-fleet-partitioning');
+const route_gap_no_audit_log_0_references = require('../routes/gap-no-audit-log-0-references');
+const route_gap_no_notification_engine_0_references = require('../routes/gap-no-notification-engine-0-references');
+const route_gap_no_webhook_dispatch_for_alerts_to = require('../routes/gap-no-webhook-dispatch-for-alerts-to');
+if (!process.env.JWT_SECRET) { console.error('FATAL: JWT_SECRET not set'); process.exit(1); }
+
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5001;
-const JWT_SECRET = process.env.JWT_SECRET || 'iot-platform-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Logger
 const logger = winston.createLogger({
@@ -24,8 +38,17 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console({ format: winston.format.simple() })],
 });
 
+// AI Rate limiter: 20 requests per hour per user/IP
+const aiRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  keyGenerator: (req) => req.user?.id ? `user-${req.user.id}` : req.ip,
+  handler: (req, res) => res.status(429).json({ error: 'Too many AI requests. Limit: 20 per hour.' }),
+});
+
 // Middleware
-app.use(cors());
+app.use(helmet());
+app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }));
 app.use(express.json());
 
 // Auth middleware
@@ -185,19 +208,33 @@ app.put('/api/auth/password', auth, async (req, res) => {
 
 app.get('/api/devices', auth, async (req, res) => {
   try {
-    const { type, status, group_name, search } = req.query;
-    let query = 'SELECT * FROM devices WHERE user_id = $1';
+    const { type, status, group_name, search, page, limit: lim } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(lim) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    let baseQuery = 'FROM devices WHERE user_id = $1';
     const params = [req.user.id];
     let idx = 2;
 
-    if (type) { query += ` AND type = $${idx++}`; params.push(type); }
-    if (status) { query += ` AND status = $${idx++}`; params.push(status); }
-    if (group_name) { query += ` AND group_name = $${idx++}`; params.push(group_name); }
-    if (search) { query += ` AND (name ILIKE $${idx} OR location ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+    if (type) { baseQuery += ` AND type = $${idx++}`; params.push(type); }
+    if (status) { baseQuery += ` AND status = $${idx++}`; params.push(status); }
+    if (group_name) { baseQuery += ` AND group_name = $${idx++}`; params.push(group_name); }
+    if (search) { baseQuery += ` AND (name ILIKE $${idx} OR location ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
 
-    query += ' ORDER BY created_at DESC';
+    const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    const query = `SELECT * ${baseQuery} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`;
+    params.push(limitNum, offset);
+
     const result = await pool.query(query, params);
-    res.json(result.rows);
+
+    // If no pagination params provided, return array for backwards compat
+    if (!page && !lim) {
+      return res.json(result.rows);
+    }
+    res.json({ data: result.rows, total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) });
   } catch (err) {
     logger.error('Get devices error:', err);
     res.status(500).json({ error: 'Failed to get devices' });
@@ -285,22 +322,32 @@ app.delete('/api/devices/:id', auth, async (req, res) => {
 
 app.get('/api/telemetry', auth, async (req, res) => {
   try {
-    const { device_id, metric_type, start_date, end_date, limit: lim } = req.query;
-    let query = `SELECT t.*, d.name as device_name FROM telemetry t JOIN devices d ON t.device_id = d.id WHERE d.user_id = $1`;
+    const { device_id, metric_type, start_date, end_date, limit: lim, page } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(500, Math.max(1, parseInt(lim) || 100));
+    const offset = (pageNum - 1) * limitNum;
+
+    let baseQuery = `FROM telemetry t JOIN devices d ON t.device_id = d.id WHERE d.user_id = $1`;
     const params = [req.user.id];
     let idx = 2;
 
-    if (device_id) { query += ` AND t.device_id = $${idx++}`; params.push(device_id); }
-    if (metric_type) { query += ` AND t.metric_type = $${idx++}`; params.push(metric_type); }
-    if (start_date) { query += ` AND t.timestamp >= $${idx++}`; params.push(start_date); }
-    if (end_date) { query += ` AND t.timestamp <= $${idx++}`; params.push(end_date); }
+    if (device_id) { baseQuery += ` AND t.device_id = $${idx++}`; params.push(device_id); }
+    if (metric_type) { baseQuery += ` AND t.metric_type = $${idx++}`; params.push(metric_type); }
+    if (start_date) { baseQuery += ` AND t.timestamp >= $${idx++}`; params.push(start_date); }
+    if (end_date) { baseQuery += ` AND t.timestamp <= $${idx++}`; params.push(end_date); }
 
-    query += ' ORDER BY t.timestamp DESC';
-    query += ` LIMIT $${idx++}`;
-    params.push(parseInt(lim) || 100);
+    const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    const query = `SELECT t.*, d.name as device_name ${baseQuery} ORDER BY t.timestamp DESC LIMIT $${idx} OFFSET $${idx + 1}`;
+    params.push(limitNum, offset);
 
     const result = await pool.query(query, params);
-    res.json(result.rows);
+
+    if (!page) {
+      return res.json(result.rows);
+    }
+    res.json({ data: result.rows, total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to get telemetry' });
   }
@@ -450,14 +497,16 @@ app.get('/api/ai-analyses', auth, async (req, res) => {
   }
 });
 
-app.post('/api/ai-analyses', auth, async (req, res) => {
+app.post('/api/ai-analyses', auth, aiRateLimiter, async (req, res) => {
   try {
     const { device_id, analysis_type } = req.body;
-    let result, aiResult;
+    let result, aiResult, tokensUsed;
 
     if (analysis_type === 'fleet_analysis') {
       const devices = await pool.query('SELECT * FROM devices WHERE user_id = $1', [req.user.id]);
-      aiResult = await aiService.fleetAnalysis(devices.rows);
+      const { content, tokens } = await aiService.fleetAnalysisWithTokens(devices.rows);
+      aiResult = content;
+      tokensUsed = tokens;
     } else if (analysis_type === 'energy_optimization') {
       const devices = await pool.query('SELECT * FROM devices WHERE user_id = $1', [req.user.id]);
       const telemetry = await pool.query(
@@ -465,7 +514,9 @@ app.post('/api/ai-analyses', auth, async (req, res) => {
          WHERE d.user_id = $1 AND t.metric_type IN ('power', 'battery_level') ORDER BY t.timestamp DESC LIMIT 50`,
         [req.user.id]
       );
-      aiResult = await aiService.energyOptimization(devices.rows, telemetry.rows);
+      const { content, tokens } = await aiService.energyOptimizationWithTokens(devices.rows, telemetry.rows);
+      aiResult = content;
+      tokensUsed = tokens;
     } else {
       const device = await pool.query('SELECT * FROM devices WHERE id = $1 AND user_id = $2', [device_id, req.user.id]);
       if (device.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
@@ -473,19 +524,29 @@ app.post('/api/ai-analyses', auth, async (req, res) => {
         'SELECT * FROM telemetry WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 20', [device_id]
       );
 
+      let analysisResult;
       if (analysis_type === 'predictive_maintenance') {
-        aiResult = await aiService.predictiveMaintenance(device.rows[0], telemetry.rows);
+        analysisResult = await aiService.predictiveMaintenanceWithTokens(device.rows[0], telemetry.rows);
       } else if (analysis_type === 'anomaly_detection') {
-        aiResult = await aiService.anomalyDetection(telemetry.rows, device.rows[0].name);
+        analysisResult = await aiService.anomalyDetectionWithTokens(telemetry.rows, device.rows[0].name);
       } else {
-        aiResult = await aiService.analyzeDevice(device.rows[0], telemetry.rows);
+        analysisResult = await aiService.analyzeDeviceWithTokens(device.rows[0], telemetry.rows);
       }
+      aiResult = analysisResult.content;
+      tokensUsed = analysisResult.tokens;
+    }
+
+    // Store parsed result if JSON, else raw text
+    let storedResult = aiResult;
+    if (typeof aiResult === 'string') {
+      try { storedResult = JSON.stringify(JSON.parse(aiResult)); } catch (e) { /* keep raw */ }
     }
 
     result = await pool.query(
       `INSERT INTO ai_analyses (user_id, device_id, analysis_type, prompt, result, model, tokens_used)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [req.user.id, device_id || null, analysis_type, `Run ${analysis_type}`, aiResult, process.env.OPENROUTER_MODEL || 'anthropic/claude-haiku-4.5', Math.floor(Math.random() * 1000) + 500]
+      [req.user.id, device_id || null, analysis_type, `Run ${analysis_type}`, storedResult,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', tokensUsed || 0]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -570,6 +631,95 @@ app.get('/api/edge-inferences', auth, async (req, res) => {
   }
 });
 
+app.post('/api/edge-inferences', auth, async (req, res) => {
+  try {
+    const { device_id, model_name, input_data, result: inferenceResult, latency_ms, confidence } = req.body;
+    if (!device_id || !model_name) return res.status(400).json({ error: 'device_id and model_name are required' });
+
+    const device = await pool.query('SELECT id FROM devices WHERE id = $1 AND user_id = $2', [device_id, req.user.id]);
+    if (device.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+
+    const dbResult = await pool.query(
+      `INSERT INTO edge_inferences (device_id, model_name, input_data, result, latency_ms, confidence)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [device_id, model_name, JSON.stringify(input_data || {}), JSON.stringify(inferenceResult || {}),
+       latency_ms || null, confidence || null]
+    );
+
+    const withDevice = await pool.query(
+      `SELECT ei.*, d.name as device_name FROM edge_inferences ei
+       JOIN devices d ON ei.device_id = d.id WHERE ei.id = $1`, [dbResult.rows[0].id]
+    );
+    res.status(201).json(withDevice.rows[0]);
+  } catch (err) {
+    logger.error('Edge inference create error:', err);
+    res.status(500).json({ error: 'Failed to create edge inference' });
+  }
+});
+
+app.get('/api/edge-inferences/:id', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ei.*, d.name as device_name FROM edge_inferences ei
+       JOIN devices d ON ei.device_id = d.id WHERE ei.id = $1 AND d.user_id = $2`,
+      [req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Edge inference not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get edge inference' });
+  }
+});
+
+// ============ AI FLEET QUERY ============
+
+app.post('/api/ai/fleet-query', auth, aiRateLimiter, async (req, res) => {
+  try {
+    const { query: naturalQuery } = req.body;
+    if (!naturalQuery) return res.status(400).json({ error: 'query is required' });
+
+    const systemPrompt = `You are a SQL generator for an IoT platform. Convert natural language queries into PostgreSQL SELECT statements.
+Only use these tables: devices, telemetry, alerts.
+devices columns: id, user_id, name, type, status, location, group_name, firmware_version, ip_address, mac_address, last_seen, metadata, created_at
+telemetry columns: id, device_id, metric_type, value, unit, timestamp
+alerts columns: id, device_id, user_id, type, severity, message, resolved, created_at, resolved_at
+Always filter devices by user_id = :user_id placeholder (use $1 parameter).
+Return ONLY a JSON object: {"sql": "SELECT ...", "params": ["value1"]}
+Never use INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE. Only SELECT.`;
+
+    const userPrompt = `Convert to SQL: "${naturalQuery}"\nUser ID for filtering: ${req.user.id}`;
+
+    const sqlResponse = await aiService.makeRequest([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ]);
+
+    let generated_sql, sqlParams;
+    try {
+      const parsed = typeof sqlResponse === 'string' ? JSON.parse(sqlResponse) : sqlResponse;
+      generated_sql = parsed.sql;
+      sqlParams = parsed.params || [req.user.id];
+    } catch (e) {
+      return res.status(500).json({ error: 'AI failed to generate valid SQL' });
+    }
+
+    // Security: only allow SELECT, only allowed tables
+    const upperSql = generated_sql.toUpperCase();
+    if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b/.test(upperSql)) {
+      return res.status(400).json({ error: 'Only SELECT queries are allowed' });
+    }
+    if (!/^SELECT\b/.test(upperSql.trim())) {
+      return res.status(400).json({ error: 'Only SELECT queries are allowed' });
+    }
+
+    const results = await pool.query(generated_sql, sqlParams);
+    res.json({ results: results.rows, generated_sql, count: results.rowCount });
+  } catch (err) {
+    logger.error('Fleet query error:', err);
+    res.status(500).json({ error: 'Fleet query failed', message: err.message });
+  }
+});
+
 // ============ DASHBOARD STATS ============
 
 app.get('/api/dashboard/stats', auth, async (req, res) => {
@@ -610,7 +760,7 @@ app.get('/api/dashboard/stats', auth, async (req, res) => {
 
 // ============ SMART HOME AGENT ROUTES ============
 
-app.post('/api/smart-agents/optimize-energy', auth, async (req, res) => {
+app.post('/api/smart-agents/optimize-energy', auth, aiRateLimiter, async (req, res) => {
   try {
     const { devices, monthly_bill, preferences } = req.body;
     const result = await aiService.makeRequest([{ role: 'user', content: `Optimize home energy usage. Devices: ${JSON.stringify(devices)}. Monthly bill: $${monthly_bill || 150}. Preferences: ${preferences || 'comfort and savings balance'}. Return JSON with: savings_potential_percent, monthly_savings_dollars, device_recommendations (array with device, current_usage, recommended_change, savings), schedule_optimization, peak_hour_strategy, total_annual_savings.` }]);
@@ -618,7 +768,7 @@ app.post('/api/smart-agents/optimize-energy', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/smart-agents/learn-habits', auth, async (req, res) => {
+app.post('/api/smart-agents/learn-habits', auth, aiRateLimiter, async (req, res) => {
   try {
     const { routine_description, household_size, work_schedule } = req.body;
     const result = await aiService.makeRequest([{ role: 'user', content: `Learn household habits and suggest automations. Routine: ${routine_description}. Household size: ${household_size || 2}. Work schedule: ${work_schedule || '9-5'}. Return JSON with: detected_patterns (array), suggested_automations (array with name, trigger, action, devices, benefit), comfort_score, efficiency_improvements, smart_scenes (array with name, time, devices_config).` }]);
@@ -626,13 +776,314 @@ app.post('/api/smart-agents/learn-habits', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/smart-agents/security-check', auth, async (req, res) => {
+app.post('/api/smart-agents/security-check', auth, aiRateLimiter, async (req, res) => {
   try {
     const { devices, time_of_day, occupancy } = req.body;
     const result = await aiService.makeRequest([{ role: 'user', content: `Perform smart home security assessment. Devices: ${JSON.stringify(devices)}. Time: ${time_of_day || 'evening'}. Occupancy: ${occupancy || 'home'}. Return JSON with: security_score (0-100), vulnerabilities (array), recommendations (array with priority, action, devices), emergency_protocols, camera_coverage_assessment, lock_status_review.` }]);
     res.json(typeof result === 'string' ? { analysis: result } : result);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ============ DIGITAL TWIN / DEVICE SHADOW ROUTES ============
+
+// GET device shadow (desired + reported state)
+app.get('/api/devices/:id/shadow', auth, async (req, res) => {
+  try {
+    // Ensure shadow columns exist
+    await pool.query(`
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS desired_state JSONB DEFAULT '{}';
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS reported_state JSONB DEFAULT '{}';
+    `).catch(() => {});
+    const result = await pool.query(
+      'SELECT id, name, type, status, desired_state, reported_state, metadata, updated_at FROM devices WHERE id = $1',
+      [req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    const device = result.rows[0];
+    const desired = device.desired_state || {};
+    const reported = device.reported_state || {};
+    // Compute delta
+    const delta = {};
+    for (const key of new Set([...Object.keys(desired), ...Object.keys(reported)])) {
+      if (JSON.stringify(desired[key]) !== JSON.stringify(reported[key])) {
+        delta[key] = { desired: desired[key], reported: reported[key] };
+      }
+    }
+    res.json({ device_id: device.id, name: device.name, desired_state: desired, reported_state: reported, delta, in_sync: Object.keys(delta).length === 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT update desired state (config push)
+app.put('/api/devices/:id/shadow/desired', auth, async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS desired_state JSONB DEFAULT '{}'`).catch(() => {});
+    const { state } = req.body;
+    if (!state || typeof state !== 'object') return res.status(400).json({ error: 'state object required' });
+    const result = await pool.query(
+      "UPDATE devices SET desired_state = desired_state || $1::jsonb, metadata = metadata || jsonb_build_object('last_config_push', NOW()::text) WHERE id = $2 RETURNING id, name, desired_state",
+      [JSON.stringify(state), req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    broadcast('shadow_update', { device_id: parseInt(req.params.id), type: 'desired', state });
+    res.json({ message: 'Desired state updated', device: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT update reported state (device reports back)
+app.put('/api/devices/:id/shadow/reported', auth, async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS reported_state JSONB DEFAULT '{}'`).catch(() => {});
+    const { state } = req.body;
+    if (!state || typeof state !== 'object') return res.status(400).json({ error: 'state object required' });
+    const result = await pool.query(
+      "UPDATE devices SET reported_state = reported_state || $1::jsonb, last_seen = NOW() WHERE id = $2 RETURNING id, name, desired_state, reported_state",
+      [JSON.stringify(state), req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    broadcast('shadow_update', { device_id: parseInt(req.params.id), type: 'reported', state });
+    res.json({ message: 'Reported state updated', device: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST AI drift analysis — AI explains config drift and recommends remediation
+app.post('/api/devices/:id/shadow/analyze-drift', auth, aiRateLimiter, async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS desired_state JSONB DEFAULT '{}'; ALTER TABLE devices ADD COLUMN IF NOT EXISTS reported_state JSONB DEFAULT '{}'`).catch(() => {});
+    const device = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
+    if (device.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    const d = device.rows[0];
+    const desired = d.desired_state || {};
+    const reported = d.reported_state || {};
+    const result = await aiService.makeRequest([
+      { role: 'system', content: 'You are an IoT device shadow analyst. Analyze configuration drift between desired and reported state. Return JSON with: drift_severity (none/low/medium/high), drifted_fields (array with field, desired, reported, risk), root_cause_hypothesis (string), remediation_steps (array), auto_recoverable (boolean).' },
+      { role: 'user', content: `Device: ${d.name} (${d.type}), Status: ${d.status}\nDesired: ${JSON.stringify(desired)}\nReported: ${JSON.stringify(reported)}\nAnalyze drift and return JSON only.` }
+    ]);
+    // Save to ai_analyses
+    await pool.query(
+      'INSERT INTO ai_analyses (user_id, device_id, analysis_type, result, model) VALUES ($1,$2,$3,$4,$5)',
+      [req.user.id, d.id, 'shadow-drift', typeof result === 'string' ? result : JSON.stringify(result), aiService.model]
+    ).catch(() => {});
+    res.json({ device_id: d.id, drift_analysis: result, desired_state: desired, reported_state: reported });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET fleet shadow summary — all devices with drift status
+app.get('/api/fleet/shadow-summary', auth, async (req, res) => {
+  try {
+    await pool.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS desired_state JSONB DEFAULT '{}'; ALTER TABLE devices ADD COLUMN IF NOT EXISTS reported_state JSONB DEFAULT '{}'`).catch(() => {});
+    const result = await pool.query("SELECT id, name, type, status, desired_state, reported_state FROM devices WHERE user_id = $1 ORDER BY name", [req.user.id]);
+    const devices = result.rows.map(d => {
+      const desired = d.desired_state || {};
+      const reported = d.reported_state || {};
+      const deltaKeys = [...new Set([...Object.keys(desired), ...Object.keys(reported)])].filter(k => JSON.stringify(desired[k]) !== JSON.stringify(reported[k]));
+      return { ...d, drift_count: deltaKeys.length, in_sync: deltaKeys.length === 0 };
+    });
+    res.json({ devices, total: devices.length, in_sync: devices.filter(d => d.in_sync).length, drifted: devices.filter(d => !d.in_sync).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ AI: Cluster / Firmware Recommendation / Edge Inference Deployment ============
+
+app.post('/api/ai/device-cluster-analysis', auth, aiRateLimiter, async (req, res) => {
+  try {
+    const devicesRes = await pool.query('SELECT * FROM devices WHERE user_id = $1', [req.user.id]);
+    const devices = devicesRes.rows;
+    if (devices.length === 0) return res.status(400).json({ error: 'No devices to cluster' });
+    const telemetryRes = await pool.query(
+      `SELECT t.* FROM telemetry t JOIN devices d ON t.device_id = d.id
+       WHERE d.user_id = $1 ORDER BY t.timestamp DESC LIMIT 200`,
+      [req.user.id]
+    );
+    const { content, tokens } = await aiService.deviceClusterAnalysisWithTokens(devices, telemetryRes.rows);
+    let stored = content;
+    try { stored = JSON.stringify(JSON.parse(content)); } catch (e) { /* keep raw */ }
+    const result = await pool.query(
+      `INSERT INTO ai_analyses (user_id, device_id, analysis_type, prompt, result, model, tokens_used)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, null, 'device_cluster_analysis', 'Cluster fleet by behavior', stored,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', tokens || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    logger.error('Cluster analysis error:', err);
+    res.status(500).json({ error: 'Failed to run cluster analysis' });
+  }
+});
+
+app.post('/api/ai/firmware-recommendation', auth, aiRateLimiter, async (req, res) => {
+  try {
+    const { device_id, latest_firmware } = req.body;
+    if (!device_id) return res.status(400).json({ error: 'device_id required' });
+    const deviceRes = await pool.query('SELECT * FROM devices WHERE id = $1 AND user_id = $2', [device_id, req.user.id]);
+    if (deviceRes.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+    const telemetryRes = await pool.query(
+      'SELECT * FROM telemetry WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 40', [device_id]
+    );
+
+    let firmwareSpec = latest_firmware || null;
+    if (!firmwareSpec) {
+      try {
+        const fwRes = await pool.query(
+          `SELECT * FROM firmware WHERE device_type = $1 ORDER BY id DESC LIMIT 1`,
+          [deviceRes.rows[0].type]
+        );
+        if (fwRes.rows.length > 0) firmwareSpec = { version: fwRes.rows[0].version, notes: fwRes.rows[0].notes };
+      } catch (e) { /* firmware table may differ */ }
+    }
+
+    const { content, tokens } = await aiService.firmwareRecommendationWithTokens(deviceRes.rows[0], telemetryRes.rows, firmwareSpec);
+    let stored = content;
+    try { stored = JSON.stringify(JSON.parse(content)); } catch (e) { /* keep raw */ }
+    const result = await pool.query(
+      `INSERT INTO ai_analyses (user_id, device_id, analysis_type, prompt, result, model, tokens_used)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, device_id, 'firmware_recommendation', 'Firmware advisory', stored,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', tokens || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    logger.error('Firmware recommendation error:', err);
+    res.status(500).json({ error: 'Failed to run firmware recommendation' });
+  }
+});
+
+app.post('/api/ai/edge-inference-deployment', auth, aiRateLimiter, async (req, res) => {
+  try {
+    const { device_id, model } = req.body;
+    if (!device_id || !model || !model.name) {
+      return res.status(400).json({ error: 'device_id and model.name required' });
+    }
+    const deviceRes = await pool.query('SELECT * FROM devices WHERE id = $1 AND user_id = $2', [device_id, req.user.id]);
+    if (deviceRes.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+
+    const { content, tokens } = await aiService.edgeInferenceDeploymentWithTokens(deviceRes.rows[0], model);
+    let stored = content;
+    try { stored = JSON.stringify(JSON.parse(content)); } catch (e) { /* keep raw */ }
+    const result = await pool.query(
+      `INSERT INTO ai_analyses (user_id, device_id, analysis_type, prompt, result, model, tokens_used)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, device_id, 'edge_inference_deployment', `Deploy ${model.name}`, stored,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', tokens || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    logger.error('Edge inference deployment error:', err);
+    res.status(500).json({ error: 'Failed to plan edge inference deployment' });
+  }
+});
+
+// ---------- Apply pass 5 backlog: 3 advisory AI endpoints ---------- //
+
+app.post('/api/ai/smart-agent-orchestration', auth, aiRateLimiter, async (req, res) => {
+  try {
+    if (!process.env.OPENROUTER_API_KEY) {
+      return res.status(503).json({ error: 'AI service unavailable: OPENROUTER_API_KEY not configured' });
+    }
+    const { goal, device_ids } = req.body || {};
+    let devicesQuery = 'SELECT * FROM devices WHERE user_id = $1';
+    const params = [req.user.id];
+    if (Array.isArray(device_ids) && device_ids.length) {
+      devicesQuery += ' AND id = ANY($2::int[])';
+      params.push(device_ids);
+    }
+    const devicesRes = await pool.query(devicesQuery, params);
+    if (devicesRes.rows.length === 0) return res.status(400).json({ error: 'No devices for orchestration' });
+    let automations = [];
+    try {
+      const r = await pool.query('SELECT * FROM automations WHERE user_id = $1 LIMIT 100', [req.user.id]);
+      automations = r.rows;
+    } catch (e) { /* table may not exist */ }
+    const { content, tokens } = await aiService.smartAgentOrchestrationWithTokens(devicesRes.rows, automations, goal);
+    let stored = content;
+    try { stored = JSON.stringify(JSON.parse(content)); } catch (e) { /* keep raw */ }
+    const result = await pool.query(
+      `INSERT INTO ai_analyses (user_id, device_id, analysis_type, prompt, result, model, tokens_used)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, null, 'smart_agent_orchestration', goal || 'fleet orchestration', stored,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', tokens || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    logger.error('Smart agent orchestration error:', err);
+    res.status(500).json({ error: 'Failed to plan orchestration' });
+  }
+});
+
+app.post('/api/ai/health-monitor-summary', auth, aiRateLimiter, async (req, res) => {
+  try {
+    if (!process.env.OPENROUTER_API_KEY) {
+      return res.status(503).json({ error: 'AI service unavailable: OPENROUTER_API_KEY not configured' });
+    }
+    const devicesRes = await pool.query('SELECT * FROM devices WHERE user_id = $1', [req.user.id]);
+    if (devicesRes.rows.length === 0) return res.status(400).json({ error: 'No devices to summarize' });
+    let alerts = [];
+    try {
+      const r = await pool.query(
+        `SELECT a.* FROM alerts a JOIN devices d ON a.device_id = d.id WHERE d.user_id = $1 AND (a.resolved_at IS NULL OR a.resolved IS NOT TRUE) ORDER BY a.created_at DESC LIMIT 100`,
+        [req.user.id]
+      );
+      alerts = r.rows;
+    } catch (e) { /* table shape may differ */ }
+    const telemetryRes = await pool.query(
+      `SELECT t.* FROM telemetry t JOIN devices d ON t.device_id = d.id WHERE d.user_id = $1 ORDER BY t.timestamp DESC LIMIT 200`,
+      [req.user.id]
+    );
+    const { content, tokens } = await aiService.healthMonitorSummaryWithTokens(devicesRes.rows, alerts, telemetryRes.rows);
+    let stored = content;
+    try { stored = JSON.stringify(JSON.parse(content)); } catch (e) { /* keep raw */ }
+    const result = await pool.query(
+      `INSERT INTO ai_analyses (user_id, device_id, analysis_type, prompt, result, model, tokens_used)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, null, 'health_monitor_summary', 'Fleet health summary', stored,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', tokens || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    logger.error('Health monitor summary error:', err);
+    res.status(500).json({ error: 'Failed to summarize fleet health' });
+  }
+});
+
+app.post('/api/ai/energy-efficiency-advisor', auth, aiRateLimiter, async (req, res) => {
+  try {
+    if (!process.env.OPENROUTER_API_KEY) {
+      return res.status(503).json({ error: 'AI service unavailable: OPENROUTER_API_KEY not configured' });
+    }
+    const { tariff } = req.body || {};
+    const devicesRes = await pool.query('SELECT * FROM devices WHERE user_id = $1', [req.user.id]);
+    if (devicesRes.rows.length === 0) return res.status(400).json({ error: 'No devices to advise on' });
+    const telemetryRes = await pool.query(
+      `SELECT t.* FROM telemetry t JOIN devices d ON t.device_id = d.id WHERE d.user_id = $1 ORDER BY t.timestamp DESC LIMIT 250`,
+      [req.user.id]
+    );
+    const { content, tokens } = await aiService.energyEfficiencyAdvisorWithTokens(devicesRes.rows, telemetryRes.rows, tariff || null);
+    let stored = content;
+    try { stored = JSON.stringify(JSON.parse(content)); } catch (e) { /* keep raw */ }
+    const result = await pool.query(
+      `INSERT INTO ai_analyses (user_id, device_id, analysis_type, prompt, result, model, tokens_used)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [req.user.id, null, 'energy_efficiency_advisor', 'Energy efficiency advisor', stored,
+       process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', tokens || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    logger.error('Energy efficiency advisor error:', err);
+    res.status(500).json({ error: 'Failed to advise on energy efficiency' });
+  }
+});
+
+app.use('/api/agentic-device-health', require('./routes/agenticDeviceHealth'));
+app.use('/api/federated-learning', require('./routes/federatedLearning'));
 
 // Initialize and start
 async function start() {
@@ -648,3 +1099,14 @@ async function start() {
 }
 
 start();
+
+
+app.use('/api/gap-no-automated-rule-tuning-from-historical', route_gap_no_automated_rule_tuning_from_historical);
+app.use('/api/gap-no-predictive-bandwidthcost-optimizer-fo', route_gap_no_predictive_bandwidthcost_optimizer_fo);
+app.use('/api/gap-no-videoaudio-anomaly-detection-for-av', route_gap_no_videoaudio_anomaly_detection_for_av);
+app.use('/api/gap-no-mqtt-broker-integration-only-http', route_gap_no_mqtt_broker_integration_only_http);
+app.use('/api/gap-no-ota-firmware-delivery-pipeline-only', route_gap_no_ota_firmware_delivery_pipeline_only);
+app.use('/api/gap-no-multi-tenant-fleet-partitioning', route_gap_no_multi_tenant_fleet_partitioning);
+app.use('/api/gap-no-audit-log-0-references', route_gap_no_audit_log_0_references);
+app.use('/api/gap-no-notification-engine-0-references', route_gap_no_notification_engine_0_references);
+app.use('/api/gap-no-webhook-dispatch-for-alerts-to', route_gap_no_webhook_dispatch_for_alerts_to);
