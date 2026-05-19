@@ -1110,3 +1110,11 @@ app.use('/api/gap-no-multi-tenant-fleet-partitioning', route_gap_no_multi_tenant
 app.use('/api/gap-no-audit-log-0-references', route_gap_no_audit_log_0_references);
 app.use('/api/gap-no-notification-engine-0-references', route_gap_no_notification_engine_0_references);
 app.use('/api/gap-no-webhook-dispatch-for-alerts-to', route_gap_no_webhook_dispatch_for_alerts_to);
+
+// === Custom Views (mounted BEFORE 404 handler) ===
+app.use('/api/custom-views', require('../routes/customViews'));
+
+// 404 fallback for unmatched /api routes
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found', path: req.originalUrl });
+});

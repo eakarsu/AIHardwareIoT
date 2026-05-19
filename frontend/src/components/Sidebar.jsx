@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Cpu, Activity, Bell, Brain, Download, Settings, Radio, Zap } from 'lucide-react';
+import { LayoutDashboard, Cpu, Activity, Bell, Brain, Download, Settings, Radio, Zap, LayoutGrid } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -10,6 +10,7 @@ const navItems = [
   { to: '/edge-inference', icon: Zap, label: 'Edge Inference' },
   { to: '/firmware', icon: Download, label: 'Firmware' },
   { to: '/advanced-ai', icon: Brain, label: 'Advanced AI' },
+  { to: '/custom-views', icon: LayoutGrid, label: 'IoT Views' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

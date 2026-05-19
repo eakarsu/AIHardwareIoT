@@ -34,6 +34,7 @@ import GapNoMultiTenantFleetPartitioning from './pages/GapNoMultiTenantFleetPart
 import GapNoAuditLog0References from './pages/GapNoAuditLog0References';
 import GapNoNotificationEngine0References from './pages/GapNoNotificationEngine0References';
 import GapNoWebhookDispatchForAlertsTo from './pages/GapNoWebhookDispatchForAlertsTo';
+import CustomViewsPage from './pages/CustomViewsPage';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -92,6 +93,7 @@ function AppRoutes() {
           <Route path="/gap-no-audit-log-0-references" element={<GapNoAuditLog0References />} />
           <Route path="/gap-no-notification-engine-0-references" element={<GapNoNotificationEngine0References />} />
           <Route path="/gap-no-webhook-dispatch-for-alerts-to" element={<GapNoWebhookDispatchForAlertsTo />} />
+          <Route path="/custom-views" element={<PrivateRoute><AppLayout><CustomViewsPage /></AppLayout></PrivateRoute>} />
 </Routes>
   );
 }
