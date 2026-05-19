@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import api from '../services/api';
+import { AlertTriangle } from 'lucide-react';
 
 const renderResult = (obj, depth = 0) => {
   if (!obj) return null;
@@ -24,28 +25,64 @@ export default function SmartAgents() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({});
+  const [rateLimitError, setRateLimitError] = useState('');
+  // Fleet Query state
+  const [fleetQuery, setFleetQuery] = useState('');
+  const [fleetLoading, setFleetLoading] = useState(false);
+  const [fleetResult, setFleetResult] = useState(null);
 
   const run = async (endpoint, body) => {
-    setLoading(true); setResult(null);
+    setLoading(true); setResult(null); setRateLimitError('');
     try {
       const res = await api.post(`/smart-agents/${endpoint}`, body);
       setResult(res.data);
-    } catch (err) { setResult({ error: err.response?.data?.error || err.message }); }
+    } catch (err) {
+      if (err.response?.status === 429) {
+        setRateLimitError('Rate limit reached. You can make up to 20 AI requests per hour.');
+      } else {
+        setResult({ error: err.response?.data?.error || err.message });
+      }
+    }
     setLoading(false);
+  };
+
+  const runFleetQuery = async () => {
+    if (!fleetQuery.trim()) return;
+    setFleetLoading(true); setFleetResult(null); setRateLimitError('');
+    try {
+      const res = await api.post('/ai/fleet-query', { query: fleetQuery });
+      setFleetResult(res.data);
+    } catch (err) {
+      if (err.response?.status === 429) {
+        setRateLimitError('Rate limit reached. You can make up to 20 AI requests per hour.');
+      } else {
+        setFleetResult({ error: err.response?.data?.error || err.message });
+      }
+    }
+    setFleetLoading(false);
   };
 
   const agents = [
     { id: 'optimize-energy', name: 'Energy Optimizer', icon: '⚡', desc: 'Optimize device energy consumption and reduce bills' },
     { id: 'learn-habits', name: 'Habit Learner', icon: '🧠', desc: 'Learn household patterns and suggest automations' },
     { id: 'security-check', name: 'Security Checker', icon: '🛡️', desc: 'Assess smart home security and vulnerabilities' },
+    { id: 'fleet-query', name: 'Fleet Query', icon: '🔍', desc: 'Ask natural language questions about your fleet' },
   ];
 
   return (
     <div>
       <h1 className="text-2xl font-bold text-white mb-2">🤖 Smart Home Agents</h1>
-      <p className="text-gray-400 mb-6">AI-powered energy optimization, habit learning, and security assessment</p>
+      <p className="text-gray-400 mb-6">AI-powered energy optimization, habit learning, security assessment, and fleet queries</p>
 
-      <div className="grid grid-cols-3 gap-3 mb-6">
+      {rateLimitError && (
+        <div className="flex items-center gap-3 p-4 mb-4 bg-orange-500/10 border border-orange-500/30 rounded-xl text-orange-400">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+          <p className="text-sm">{rateLimitError}</p>
+          <button onClick={() => setRateLimitError('')} className="ml-auto text-orange-400 hover:text-white">&#x2715;</button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-4 gap-3 mb-6">
         {agents.map(a => (
           <div key={a.id} onClick={() => { setTab(a.id); setResult(null); setForm({}); }}
             className={`p-4 rounded-xl cursor-pointer border-2 transition-all ${tab === a.id ? 'bg-gray-800 border-pink-500' : 'bg-gray-800/50 border-transparent hover:border-gray-600'}`}>
@@ -104,6 +141,52 @@ export default function SmartAgents() {
             className={`w-full p-3 rounded-lg font-bold text-white ${loading ? 'bg-gray-600' : 'bg-pink-600 hover:bg-pink-500'}`}>
             {loading ? '⏳ Checking...' : '🛡️ Security Check'}
           </button>
+        </>}
+
+        {tab === 'fleet-query' && <>
+          <p className="text-gray-400 text-sm mb-3">Ask a natural language question about your IoT fleet. The AI will convert it to SQL and query your devices, telemetry, and alerts.</p>
+          <textarea className="w-full p-3 mb-3 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm" rows={3}
+            placeholder="e.g. Show me all online devices in warehouse-a, or Which devices have the highest temperature readings?"
+            value={fleetQuery} onChange={e => setFleetQuery(e.target.value)} />
+          <button onClick={runFleetQuery} disabled={fleetLoading || !fleetQuery.trim()}
+            className={`w-full p-3 rounded-lg font-bold text-white ${fleetLoading ? 'bg-gray-600' : 'bg-pink-600 hover:bg-pink-500'}`}>
+            {fleetLoading ? '⏳ Querying...' : '🔍 Query Fleet'}
+          </button>
+          {fleetResult && (
+            <div className="mt-4">
+              {fleetResult.error ? (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">{fleetResult.error}</div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-3 bg-gray-900 rounded-lg">
+                    <p className="text-xs text-gray-500 mb-1">Generated SQL:</p>
+                    <code className="text-xs text-cyan-300 whitespace-pre-wrap">{fleetResult.generated_sql}</code>
+                  </div>
+                  <p className="text-xs text-gray-400">{fleetResult.count} result(s) found</p>
+                  {fleetResult.results && fleetResult.results.length > 0 && (
+                    <div className="overflow-x-auto rounded-lg border border-gray-700">
+                      <table className="w-full text-xs">
+                        <thead className="bg-gray-700">
+                          <tr>{Object.keys(fleetResult.results[0]).map(k => (
+                            <th key={k} className="px-3 py-2 text-left text-gray-400 font-semibold">{k}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {fleetResult.results.slice(0, 20).map((row, i) => (
+                            <tr key={i} className="border-t border-gray-700/50">
+                              {Object.values(row).map((v, j) => (
+                                <td key={j} className="px-3 py-2 text-gray-300">{v == null ? '—' : String(v)}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </>}
       </div>
 

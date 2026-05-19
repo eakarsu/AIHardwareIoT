@@ -95,6 +95,17 @@ async function initDb() {
         tokens_used INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS edge_inferences (
+        id SERIAL PRIMARY KEY,
+        device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+        model_name TEXT NOT NULL,
+        input_data JSONB,
+        result JSONB,
+        latency_ms INTEGER,
+        confidence DECIMAL(5,4),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
     `);
     console.log('Database tables created successfully');
   } catch (err) {
