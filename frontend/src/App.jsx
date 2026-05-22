@@ -35,6 +35,10 @@ import GapNoAuditLog0References from './pages/GapNoAuditLog0References';
 import GapNoNotificationEngine0References from './pages/GapNoNotificationEngine0References';
 import GapNoWebhookDispatchForAlertsTo from './pages/GapNoWebhookDispatchForAlertsTo';
 import CustomViewsPage from './pages/CustomViewsPage';
+import FirmwareRollbackWindow from './pages/FirmwareRollbackWindow';
+
+import CodexCustomVizFeature from './pages/CodexCustomVizFeature';
+import CodexOperationsFeature from './pages/CodexOperationsFeature';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -62,6 +66,9 @@ function AppRoutes() {
 
   return (
     <Routes>
+        <Route path="/codex/custom-viz" element={<CodexCustomVizFeature />} />
+        <Route path="/codex/operations" element={<CodexOperationsFeature />} />
+
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" /> : <Register />} />
       <Route path="/" element={<PrivateRoute><AppLayout><Dashboard /></AppLayout></PrivateRoute>} />
@@ -93,7 +100,8 @@ function AppRoutes() {
           <Route path="/gap-no-audit-log-0-references" element={<GapNoAuditLog0References />} />
           <Route path="/gap-no-notification-engine-0-references" element={<GapNoNotificationEngine0References />} />
           <Route path="/gap-no-webhook-dispatch-for-alerts-to" element={<GapNoWebhookDispatchForAlertsTo />} />
-          <Route path="/custom-views" element={<PrivateRoute><AppLayout><CustomViewsPage /></AppLayout></PrivateRoute>} />
+      <Route path="/custom-views" element={<PrivateRoute><AppLayout><CustomViewsPage /></AppLayout></PrivateRoute>} />
+      <Route path="/firmware-rollback-window" element={<PrivateRoute><AppLayout><FirmwareRollbackWindow /></AppLayout></PrivateRoute>} />
 </Routes>
   );
 }

@@ -9,6 +9,7 @@ const navItems = [
   { to: '/ai-analytics', icon: Brain, label: 'AI Analytics' },
   { to: '/edge-inference', icon: Zap, label: 'Edge Inference' },
   { to: '/firmware', icon: Download, label: 'Firmware' },
+  { to: '/firmware-rollback-window', icon: Download, label: 'Rollback Window' },
   { to: '/advanced-ai', icon: Brain, label: 'Advanced AI' },
   { to: '/custom-views', icon: LayoutGrid, label: 'IoT Views' },
   { to: '/settings', icon: Settings, label: 'Settings' },

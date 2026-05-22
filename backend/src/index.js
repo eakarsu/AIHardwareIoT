@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer } = require('ws');
@@ -42,7 +42,7 @@ const logger = winston.createLogger({
 const aiRateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
-  keyGenerator: (req) => req.user?.id ? `user-${req.user.id}` : req.ip,
+  keyGenerator: (req) => req.user?.id ? `user-${req.user.id}` : ipKeyGenerator(req.ip),
   handler: (req, res) => res.status(429).json({ error: 'Too many AI requests. Limit: 20 per hour.' }),
 });
 
@@ -1110,6 +1110,7 @@ app.use('/api/gap-no-multi-tenant-fleet-partitioning', route_gap_no_multi_tenant
 app.use('/api/gap-no-audit-log-0-references', route_gap_no_audit_log_0_references);
 app.use('/api/gap-no-notification-engine-0-references', route_gap_no_notification_engine_0_references);
 app.use('/api/gap-no-webhook-dispatch-for-alerts-to', route_gap_no_webhook_dispatch_for_alerts_to);
+app.use('/api/firmware-rollback-window', auth, require('./routes/firmwareRollbackWindow'));
 
 // === Custom Views (mounted BEFORE 404 handler) ===
 app.use('/api/custom-views', require('../routes/customViews'));
