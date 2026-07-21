@@ -13,18 +13,11 @@ require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const pool = require('./db');
 const initDb = require('./initDb');
 const aiService = require('./services/openRouterService');
+const { validateRuntime } = require('./governance/runtime');
+const governanceRouter = require('./governance/router');
 
 // === Batch 04 Gaps & Frontend Mounts ===
-const route_gap_no_automated_rule_tuning_from_historical = require('../routes/gap-no-automated-rule-tuning-from-historical');
-const route_gap_no_predictive_bandwidthcost_optimizer_fo = require('../routes/gap-no-predictive-bandwidthcost-optimizer-fo');
-const route_gap_no_videoaudio_anomaly_detection_for_av = require('../routes/gap-no-videoaudio-anomaly-detection-for-av');
-const route_gap_no_mqtt_broker_integration_only_http = require('../routes/gap-no-mqtt-broker-integration-only-http');
-const route_gap_no_ota_firmware_delivery_pipeline_only = require('../routes/gap-no-ota-firmware-delivery-pipeline-only');
-const route_gap_no_multi_tenant_fleet_partitioning = require('../routes/gap-no-multi-tenant-fleet-partitioning');
-const route_gap_no_audit_log_0_references = require('../routes/gap-no-audit-log-0-references');
-const route_gap_no_notification_engine_0_references = require('../routes/gap-no-notification-engine-0-references');
-const route_gap_no_webhook_dispatch_for_alerts_to = require('../routes/gap-no-webhook-dispatch-for-alerts-to');
-if (!process.env.JWT_SECRET) { console.error('FATAL: JWT_SECRET not set'); process.exit(1); }
+validateRuntime();
 
 const app = express();
 const server = http.createServer(app);
@@ -81,7 +74,7 @@ function broadcast(type, data) {
 }
 
 // Simulate telemetry every 10 seconds
-setInterval(async () => {
+if (process.env.ENABLE_DEMO_TELEMETRY === 'true') setInterval(async () => {
   try {
     const devices = await pool.query("SELECT id, name, type FROM devices WHERE status = 'online' LIMIT 5");
     for (const device of devices.rows) {
@@ -1088,7 +1081,7 @@ app.use('/api/federated-learning', require('./routes/federatedLearning'));
 // Initialize and start
 async function start() {
   try {
-    await initDb();
+    if (process.env.ENABLE_LEGACY_SCHEMA_BOOTSTRAP === 'true') await initDb();
     server.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
     });
@@ -1098,19 +1091,8 @@ async function start() {
   }
 }
 
-start();
-
-
-app.use('/api/gap-no-automated-rule-tuning-from-historical', route_gap_no_automated_rule_tuning_from_historical);
-app.use('/api/gap-no-predictive-bandwidthcost-optimizer-fo', route_gap_no_predictive_bandwidthcost_optimizer_fo);
-app.use('/api/gap-no-videoaudio-anomaly-detection-for-av', route_gap_no_videoaudio_anomaly_detection_for_av);
-app.use('/api/gap-no-mqtt-broker-integration-only-http', route_gap_no_mqtt_broker_integration_only_http);
-app.use('/api/gap-no-ota-firmware-delivery-pipeline-only', route_gap_no_ota_firmware_delivery_pipeline_only);
-app.use('/api/gap-no-multi-tenant-fleet-partitioning', route_gap_no_multi_tenant_fleet_partitioning);
-app.use('/api/gap-no-audit-log-0-references', route_gap_no_audit_log_0_references);
-app.use('/api/gap-no-notification-engine-0-references', route_gap_no_notification_engine_0_references);
-app.use('/api/gap-no-webhook-dispatch-for-alerts-to', route_gap_no_webhook_dispatch_for_alerts_to);
 app.use('/api/firmware-rollback-window', auth, require('./routes/firmwareRollbackWindow'));
+app.use('/api/governed-device-operations', governanceRouter);
 
 // === Custom Views (mounted BEFORE 404 handler) ===
 app.use('/api/custom-views', require('../routes/customViews'));
@@ -1119,3 +1101,5 @@ app.use('/api/custom-views', require('../routes/customViews'));
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Not found', path: req.originalUrl });
 });
+
+start();

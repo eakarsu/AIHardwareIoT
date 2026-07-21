@@ -3,6 +3,9 @@ const bcrypt = require('bcryptjs');
 const initDb = require('./initDb');
 
 async function seed() {
+  if (process.env.NODE_ENV === 'production' || process.env.ALLOW_DEMO_SEED !== 'true') {
+    throw new Error('Demo seed refused. Set ALLOW_DEMO_SEED=true outside production.');
+  }
   const client = await pool.connect();
   try {
     await initDb();

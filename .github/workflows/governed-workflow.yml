@@ -1,0 +1,24 @@
+name: governed-workflow
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-free-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax and governed workflow contracts
+        working-directory: backend
+        run: npm run check:governance
+      - name: Non-destructive launcher syntax
+        run: bash -n start.sh

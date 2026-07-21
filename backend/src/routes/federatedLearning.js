@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db');
 const aiService = require('../services/openRouterService');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'iot-secret';
+const JWT_SECRET = process.env.JWT_SECRET;
 const router = express.Router();
 
 router.use((req, res, next) => {
