@@ -2,8 +2,6 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "$0")" && pwd)"
-backend_port="5001"
-frontend_port="3000"
 backend_pid=""
 frontend_pid=""
 
@@ -13,8 +11,14 @@ fail() {
 }
 
 [ -f "$project_dir/.env" ] || fail "copy .env.example to .env and supply local secrets"
-jwt_secret="$(sed -n 's/^JWT_SECRET=//p' "$project_dir/.env" | tail -n 1)"
-[ "${#jwt_secret}" -ge 32 ] || fail "JWT_SECRET in .env must contain at least 32 characters"
+set -a
+# shellcheck disable=SC1091
+source "$project_dir/.env"
+set +a
+[ "${#JWT_SECRET}" -ge 32 ] || fail "JWT_SECRET in .env must contain at least 32 characters"
+backend_port="${PORT:-${BACKEND_PORT:-5001}}"
+frontend_port="${FRONTEND_PORT:-${CLIENT_PORT:-3000}}"
+[ "$backend_port" != "$frontend_port" ] || fail "backend and frontend ports must be different"
 [ -d "$project_dir/backend/node_modules" ] || fail "backend dependencies are absent; run the documented npm ci step explicitly"
 [ -d "$project_dir/frontend/node_modules" ] || fail "frontend dependencies are absent; run the documented npm ci step explicitly"
 
@@ -43,15 +47,23 @@ trap shutdown INT TERM
 check_port "$backend_port"
 check_port "$frontend_port"
 
+if [ "${ALLOW_SCHEMA_MIGRATION:-false}" = "true" ]; then
+  : "${DATABASE_URL:?DATABASE_URL is required for migrations}"
+  for migration in "$project_dir"/backend/migrations/*.sql; do
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+  done
+  node "$project_dir/backend/create-admin.js"
+fi
+
 (
   cd "$project_dir/backend"
-  node src/index.js
+  PORT="$backend_port" node src/index.js
 ) &
 backend_pid="$!"
 
 (
   cd "$project_dir/frontend"
-  npm run dev -- --host 127.0.0.1 --port "$frontend_port"
+  BACKEND_PORT="$backend_port" npm run dev -- --host "${HOST:-127.0.0.1}" --port "$frontend_port" --strictPort
 ) &
 frontend_pid="$!"
 

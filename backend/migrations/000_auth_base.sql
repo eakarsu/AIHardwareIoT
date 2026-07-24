@@ -1,0 +1,33 @@
+BEGIN;
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password VARCHAR(255) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL DEFAULT 'user',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS devices (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  type VARCHAR(100) NOT NULL,
+  status VARCHAR(50) NOT NULL DEFAULT 'offline',
+  location VARCHAR(255),
+  group_name VARCHAR(100),
+  firmware_version VARCHAR(50),
+  last_seen TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS ai_analyses (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+  analysis_type VARCHAR(100) NOT NULL,
+  prompt TEXT,
+  result TEXT,
+  model VARCHAR(255),
+  tokens_used INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+COMMIT;

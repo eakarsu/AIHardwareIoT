@@ -3,7 +3,7 @@ const https = require('https');
 class OpenRouterService {
   constructor() {
     this.apiKey = process.env.OPENROUTER_API_KEY;
-    this.baseUrl = 'openrouter.ai';
+    this.baseUrl = new URL(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1');
     this.model = process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022';
   }
 
@@ -13,6 +13,7 @@ class OpenRouterService {
   }
 
   async makeRequestWithTokens(messages) {
+    if (!this.apiKey) throw new Error('OPENROUTER_API_KEY not configured');
     return new Promise((resolve, reject) => {
       const data = JSON.stringify({
         model: this.model,
@@ -21,8 +22,9 @@ class OpenRouterService {
       });
 
       const options = {
-        hostname: this.baseUrl,
-        path: '/api/v1/chat/completions',
+        hostname: this.baseUrl.hostname,
+        port: this.baseUrl.port || undefined,
+        path: `${this.baseUrl.pathname.replace(/\/$/, '')}/chat/completions`,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -38,12 +40,13 @@ class OpenRouterService {
         res.on('end', () => {
           try {
             const parsed = JSON.parse(body);
-            if (parsed.choices && parsed.choices[0]) {
-              const content = parsed.choices[0].message.content;
+            if (res.statusCode >= 200 && res.statusCode < 300 && parsed.choices && parsed.choices[0]) {
+              const content = parsed.choices[0].message?.content;
+              if (!content || !String(content).trim()) throw new Error('OpenRouter returned empty content');
               const tokens = parsed.usage?.total_tokens || 0;
               resolve({ content, tokens });
             } else {
-              reject(new Error('Invalid API response'));
+              reject(new Error(parsed.error?.message || `OpenRouter request failed with HTTP ${res.statusCode}`));
             }
           } catch (e) {
             reject(e);
