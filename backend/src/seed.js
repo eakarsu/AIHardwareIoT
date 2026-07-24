@@ -2,6 +2,12 @@ const pool = require('./db');
 const bcrypt = require('bcryptjs');
 const initDb = require('./initDb');
 
+function requireDemoPassword() {
+  const password = process.env.DEMO_PASSWORD || process.env.SEED_DEMO_PASSWORD || process.env.DEMO_SEED_PASSWORD || '';
+  if (password.length < 12 || password.length > 1024) throw new Error('DEMO_PASSWORD must contain 12-1024 characters');
+  return password;
+}
+
 async function seed() {
   if (process.env.NODE_ENV === 'production' || process.env.ALLOW_DEMO_SEED !== 'true') {
     throw new Error('Demo seed refused. Set ALLOW_DEMO_SEED=true outside production.');
@@ -18,7 +24,7 @@ async function seed() {
     }
 
     // Create admin user
-    const hashedPassword = await bcrypt.hash('admin123', 10);
+    const hashedPassword = await bcrypt.hash(requireDemoPassword(), 10);
     const userResult = await client.query(
       `INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4) RETURNING id`,
       ['admin@iot-platform.com', hashedPassword, 'Admin User', 'admin']
@@ -26,7 +32,7 @@ async function seed() {
     const userId = userResult.rows[0].id;
 
     // Create demo user
-    const demoPassword = await bcrypt.hash('demo123', 10);
+    const demoPassword = await bcrypt.hash(requireDemoPassword(), 10);
     await client.query(
       `INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4)`,
       ['demo@iot-platform.com', demoPassword, 'Demo User', 'user']
@@ -272,7 +278,7 @@ async function seed() {
     }
 
     console.log('Seed data inserted successfully!');
-    console.log('  - 2 users (admin@iot-platform.com / admin123)');
+    console.log('Demo login users provisioned from the local environment.');
     console.log('  - 20 devices');
     console.log('  - 300+ telemetry records');
     console.log('  - 20 alerts');
